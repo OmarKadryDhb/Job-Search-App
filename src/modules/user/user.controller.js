@@ -5,30 +5,45 @@ import  jwt  from 'jsonwebtoken';
 import { Token } from '../../../DB/models/token.model.js';
 import randomstring from 'randomstring'
 import { sendEmails } from "../../utils/sendEmails.js";
-import { Company } from "../../../DB/Models/company.model.js";
+import cloudinary from "../../utils/cloud.js";
+import { Cart } from "../../../DB/Models/cart.model.js";
+import { generateQrCode } from "../../utils/qrcode.js";
 
 export const signUp = asyncHandler(async(req,res,next)=>{
     const isUser = await User.findOne({email:req.body.email})
     if (isUser) return next(new Error("Email Alredy Existed !"))
-    
-    const checkPhone = await User.findOne({mobileNumber:req.body.mobileNumber})
+
+    const checkPhone = await User.findOne({phone:req.body.phone})
     if (checkPhone) return next(new Error("Mobile Number must Be Unique!"))
 
-    const hashPass = bcryptjs.hashSync(req.body.password,parseInt(process.env.SALT_ROUND))
-    
-    const user = User.create({...req.body,password:hashPass,userName:req.body.firstName+req.body.lastName})
+    const userNameExists = await User.findOne({userName:req.body.userName})
+    if (userNameExists) return next(new Error("This UserName is Already Taken!"))
 
-    const token = jwt.sign({email:user.email},process.env.SECRET_KEY)
+    // const hashPass = bcryptjs.hashSync(req.body.password,parseInt(process.env.SALT_ROUND))
+
+    const { public_id , secure_url } =  cloudinary.uploader.upload(
+        req.file.path,
+        {
+            folder:`${process.env.CLOUD_FOLDER_NAME}/users/${req.body.userName}/profilePic`
+        })
+
+    const user = await User.create({...req.body,
+        profilePicture:{id:public_id , url:secure_url}})
+
+    // const token = jwt.sign({email:user.email},process.env.SECRET_KEY)
 
     // const messageSent =  await sendEmails({to:req.body.email ,
     //     subject:"Account Activation" ,
     //     html:`<a href='http://localhost:3000/users/activateaccount/${token}'>Activate Your Account<a/>`})
     //   if (!messageSent) return next(new Error("Email is Invalid"))
   
+
+    await Cart.create({user:user._id})
+
     return res.json({success : true , message : "User Added Successfully !"})
 })
 
-// // Activate Account
+// Activate Account
 // export const activateAccount = asyncHandler(async (req , res , next)=>{
 //     const { token } = req.params
   
@@ -37,6 +52,7 @@ export const signUp = asyncHandler(async(req,res,next)=>{
 //     const user = await User.findOneAndUpdate({email:payload.email},{new : true})
 //     if (!user) return next(new Error("User Not Found!"))
   
+
 //     return res.send("Try to login!")
 // })
   
@@ -51,17 +67,18 @@ export const signIn = asyncHandler(async(req,res,next)=>{
 
     await Token.create({token,user:isUser._id,agent:req.headers["user-agent"]})
 
-    isUser.status = "online"
-    await isUser.save()
-
     return res.json({success : true , message :"Welcome !" , token })
 })
 
+export const profile = asyncHandler(async(req,res,next)=>{
+    const qrcode = await generateQrCode(req.isUser)
+    return res.json({success : true , results:qrcode})
+})
 //Update User Account
 export const updateAccount = asyncHandler(async(req,res,next)=>{
     const userId = req.isUser._id
 
-    await User.findByIdAndUpdate({_id:userId},{mobileNumber:req.body.mobileNumber,DOB:req.body.DOB},{new:true})
+    await User.findByIdAndUpdate({_id:userId},{phone:req.body.mobileNumber},{new:true})
 
     return res.json({success : true , message :"User Updated Successfully !"})
 })
@@ -69,13 +86,6 @@ export const updateAccount = asyncHandler(async(req,res,next)=>{
 //Delete User
 export const deleteUser = asyncHandler(async(req,res,next)=>{
     const userId = req.isUser.id
-
-    // User must be loggedIn
-    if (req.isUser.status != "online") return next(new Error("This User must be Loggedin First!"))
-
-    if (req.isUser.role == "hr"){
-        await Company.findOneAndDelete({companyHR:userId})
-    }
 
     await User.findByIdAndDelete(userId)
 
@@ -91,23 +101,6 @@ export const getAccData = asyncHandler(async(req,res,next)=>{
     return res.json({success : true , result:user})
 })
 
-//getOntherAccData
-export const getOntherAccData = asyncHandler(async(req,res,next)=>{
-    const {id} = req.params
-
-    const ontherUserAcc = await User.findById(id)
-    if (!ontherUserAcc) return next(new Error("User Not Found"))
-
-    return res.json({success : true , result:{
-        firstName:ontherUserAcc.firstName,
-        lastName:ontherUserAcc.lastName,
-        userName:ontherUserAcc.userName,    
-        DOB:ontherUserAcc.DOB,    
-        mobileNumber:ontherUserAcc.mobileNumber,
-        role:ontherUserAcc.role,    
-        status:ontherUserAcc.status,    
-    }})
-})
 
 //Update password 
 export const updatePassword = asyncHandler(async(req,res,next)=>{
@@ -136,7 +129,6 @@ export const forgetPassword = asyncHandler(async(req,res,next)=>{
         return next(new Error("Invalid Code!")); 
     }
     
-    user.password = bcryptjs.hashSync(req.body.password,parseInt(process.env.SALT_ROUND))
     await user.save()
 
     const tokens = await Token.find({user:user._id})
@@ -167,10 +159,4 @@ export const sendForgetPassCode = asyncHandler(async(req,res,next)=>{
 })
 ////
 
-//getAllAccounts
-export const getAllAccounts = asyncHandler(async(req,res,next)=>{
-    const accounts = await User.find({recoveryEmail:req.body.recoveryEmail})
-
-    return res.json({success : true , results:accounts})
-})
 
